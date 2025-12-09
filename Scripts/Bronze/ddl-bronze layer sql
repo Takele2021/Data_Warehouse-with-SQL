@@ -1,1 +1,184 @@
+/******************************************************************************
+================================================================================
+Stored Procedure : bronze.load_bronze
+Purpose          : Load CSV files into Bronze schema (Medallion Architecture)
+Author           : <Your Name>
+Created On       : <Date>
+================================================================================
+
+Description:
+    This stored procedure loads raw data from CSV files into the Bronze schema.
+    It performs the following actions:
+      • Truncates target Bronze tables
+      • Loads CSV files using BULK INSERT
+      • Logs duration for each table
+      • Handles all errors using TRY/CATCH
+
+Best Practices Applied:
+      ✔ Centralized file locations
+      ✔ Reusable BULK LOAD logic
+      ✔ Consistent logging format
+      ✔ Industry-standard TRY/CATCH block
+      ✔ Clearly documented sections
+
+Usage Example:
+      EXEC bronze.load_bronze;
+================================================================================
+*******************************************************************************/
+
+CREATE OR ALTER PROCEDURE bronze.load_bronze
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    /**************************************************************************
+        Section 1: Variable Declaration
+        --------------------------------
+        These variables track time taken for each table load and the entire batch.
+    **************************************************************************/
+    DECLARE 
+        @start_time       DATETIME,
+        @end_time         DATETIME,
+        @batch_start      DATETIME,
+        @batch_end        DATETIME;
+
+
+    /**************************************************************************
+        Section 2: Centralized Source File Definitions
+        -----------------------------------------------
+        This table variable stores a reusable list of Bronze tables to load.
+        Each row contains:
+            - Target table name
+            - CSV source file path
+        This eliminates duplicate TRUNCATE + BULK INSERT code.
+    **************************************************************************/
+    DECLARE @LoadList TABLE
+    (
+        TableName      SYSNAME,
+        FilePath       NVARCHAR(4000)
+    );
+
+    INSERT INTO @LoadList (TableName, FilePath)
+    VALUES
+        -- CRM Sources
+        ('bronze.crm_cust_info',     'C:\sql\dwh_project\datasets\source_crm\cust_info.csv'),
+        ('bronze.crm_prd_info',      'C:\sql\dwh_project\datasets\source_crm\prd_info.csv'),
+        ('bronze.crm_sales_details', 'C:\sql\dwh_project\datasets\source_crm\sales_details.csv'),
+
+        -- ERP Sources
+        ('bronze.erp_loc_a101',      'C:\sql\dwh_project\datasets\source_erp\loc_a101.csv'),
+        ('bronze.erp_cust_az12',     'C:\sql\dwh_project\datasets\source_erp\cust_az12.csv'),
+        ('bronze.erp_px_cat_g1v2',   'C:\sql\dwh_project\datasets\source_erp\px_cat_g1v2.csv');
+
+
+    /**************************************************************************
+        Section 3: Begin Processing
+        ----------------------------
+        Logs the start of the Bronze loading batch.
+    **************************************************************************/
+    BEGIN TRY
+
+        SET @batch_start = GETDATE();
+
+        PRINT '============================================================';
+        PRINT ' Starting Bronze Layer Load Process';
+        PRINT '============================================================';
+
+
+    /**************************************************************************
+        Section 4: Loop Through All Bronze Tables to Load
+        --------------------------------------------------
+        For each row in @LoadList:
+            1. TRUNCATE the target table
+            2. BULK INSERT from CSV file
+            3. Log duration
+    **************************************************************************/
+        DECLARE @tbl SYSNAME, @file NVARCHAR(4000), @sql NVARCHAR(MAX);
+
+        DECLARE LoadCursor CURSOR FAST_FORWARD FOR
+            SELECT TableName, FilePath
+            FROM @LoadList;
+
+        OPEN LoadCursor;
+        FETCH NEXT FROM LoadCursor INTO @tbl, @file;
+
+        WHILE @@FETCH_STATUS = 0
+        BEGIN
+            PRINT '------------------------------------------------------------';
+            PRINT 'Processing Table: ' + @tbl;
+            PRINT 'Source File     : ' + @file;
+            PRINT '------------------------------------------------------------';
+
+            SET @start_time = GETDATE();
+
+
+            /* Step 4.1 - Truncate the table */
+            PRINT '>> Truncating table...';
+            SET @sql = 'TRUNCATE TABLE ' + @tbl;
+            EXEC(@sql);
+
+
+            /* Step 4.2 - Bulk Insert data */
+            PRINT '>> Loading data via BULK INSERT...';
+
+            SET @sql = '
+                BULK INSERT ' + @tbl + '
+                FROM ''' + @file + '''
+                WITH
+                (
+                    FIRSTROW = 2,              -- Skip header row
+                    FIELDTERMINATOR = '','',   -- CSV delimiter
+                    ROWTERMINATOR = ''\n'',    -- Line ending handling
+                    TABLOCK                    -- Optimized locking for large loads
+                );';
+
+            EXEC(@sql);
+
+
+            /* Step 4.3 - Log time taken */
+            SET @end_time = GETDATE();
+            PRINT '>> Load Duration: ' + CAST(DATEDIFF(SECOND, @start_time, @end_time) AS NVARCHAR) + ' seconds';
+            PRINT '>> Done!';
+            PRINT '------------------------------------------------------------';
+
+            FETCH NEXT FROM LoadCursor INTO @tbl, @file;
+        END
+
+        CLOSE LoadCursor;
+        DEALLOCATE LoadCursor;
+
+
+    /**************************************************************************
+        Section 5: Final Summary Logging
+        --------------------------------
+        Prints total time taken for the full Bronze load batch.
+    **************************************************************************/
+        SET @batch_end = GETDATE();
+
+        PRINT '============================================================';
+        PRINT ' Bronze Layer Load - COMPLETED SUCCESSFULLY';
+        PRINT ' Total Load Duration: ' + CAST(DATEDIFF(SECOND, @batch_start, @batch_end) AS NVARCHAR) + ' seconds';
+        PRINT '============================================================';
+
+    END TRY
+
+
+    /**************************************************************************
+        Section 6: Error Handling
+        --------------------------
+        Catches all SQL errors and prints them.
+    **************************************************************************/
+    BEGIN CATCH
+        PRINT '============================================================';
+        PRINT ' ERROR OCCURRED DURING BRONZE LAYER LOADING';
+        PRINT '------------------------------------------------------------';
+        PRINT 'Error Message: ' + ERROR_MESSAGE();
+        PRINT 'Error Number : ' + CAST(ERROR_NUMBER() AS NVARCHAR);
+        PRINT 'Error State  : ' + CAST(ERROR_STATE() AS NVARCHAR);
+        PRINT '============================================================';
+        RETURN -1;
+    END CATCH
+
+END;
+GO
 
