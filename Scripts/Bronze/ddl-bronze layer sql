@@ -1,4 +1,4 @@
-/******************************************************************************
+/*
 ================================================================================
 Stored Procedure : bronze.load_bronze
 Purpose          : Load CSV files into Bronze schema (Medallion Architecture)
@@ -24,7 +24,7 @@ Best Practices Applied:
 Usage Example:
       EXEC bronze.load_bronze;
 ================================================================================
-*******************************************************************************/
+*/
 CREATE OR ALTER PROCEDURE bronze.load_bronze
 AS
 BEGIN
