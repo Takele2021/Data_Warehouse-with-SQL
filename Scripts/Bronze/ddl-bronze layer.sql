@@ -25,14 +25,17 @@ Usage Example:
       EXEC bronze.load_bronze;
 ================================================================================
 */
+
+
 CREATE OR ALTER PROCEDURE bronze.load_bronze
 AS
 BEGIN
     SET NOCOUNT ON;
 
-    -----------------------------------------------------------------
+   /* -----------------------------------------------------------------
     -- DECLARATIONS
     -----------------------------------------------------------------
+*/
     DECLARE
         @batch_start DATETIME = GETDATE(),
         @tbl SYSNAME,           -- Table name
@@ -46,9 +49,11 @@ BEGIN
     PRINT 'Starting Bronze Layer Load Process';
     PRINT '============================================================';
 
-    -----------------------------------------------------------------
+   /*
+-----------------------------------------------------------------
     -- 1. DEFINE LOAD LIST
     -----------------------------------------------------------------
+*/
     DECLARE @LoadList TABLE
     (
         ID INT IDENTITY(1,1) PRIMARY KEY,
@@ -65,9 +70,11 @@ BEGIN
         ('bronze.erp_cust_az12',      'C:\Users\takele\Documents\csv-files\bronze.erp_cust_az12.csv'),
         ('bronze.erp_px_cat_g1v2',    'C:\Users\takele\Documents\csv-files\bronze.erp_px_cat_g1v2.csv');
 
+    /*
     -----------------------------------------------------------------
     -- 2. ITERATE AND LOAD
     -----------------------------------------------------------------
+*/
     DECLARE
         @i INT = 1,
         @max INT = (SELECT COUNT(*) FROM @LoadList);
@@ -85,17 +92,20 @@ BEGIN
 
         BEGIN TRY
 
+            /*
             -------------------------------------------------------
             -- Step 1: TRUNCATE TABLE
             -------------------------------------------------------
+        */
             SET @sql = N'TRUNCATE TABLE ' + @tbl + N';';
             EXEC sys.sp_executesql @sql;
-
+/*
             -------------------------------------------------------
             -- Step 2: BULK INSERT (FIXED: Embedding file path)
             -- If the file is missing or permissions are wrong, this step will fail 
             -- and immediately jump to the CATCH block below.
             -------------------------------------------------------
+*/
             SET @sql = N'
                 BULK INSERT ' + @tbl + N'
                 FROM ''' + @file + N''' 
