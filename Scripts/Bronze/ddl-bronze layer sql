@@ -25,160 +25,113 @@ Usage Example:
       EXEC bronze.load_bronze;
 ================================================================================
 *******************************************************************************/
-
 CREATE OR ALTER PROCEDURE bronze.load_bronze
 AS
 BEGIN
     SET NOCOUNT ON;
 
-    /**************************************************************************
-        Section 1: Variable Declaration
-        --------------------------------
-        These variables track time taken for each table load and the entire batch.
-    **************************************************************************/
-    DECLARE 
-        @start_time       DATETIME,
-        @end_time         DATETIME,
-        @batch_start      DATETIME,
-        @batch_end        DATETIME;
+    -----------------------------------------------------------------
+    -- DECLARATIONS
+    -----------------------------------------------------------------
+    DECLARE
+        @batch_start DATETIME = GETDATE(),
+        @tbl SYSNAME,           -- Table name
+        @file NVARCHAR(4000),   -- File Path
+        @start_time DATETIME,
+        @end_time DATETIME,
+        @sql NVARCHAR(MAX);
+        -- @file_exists BIT is no longer needed
 
+    PRINT '============================================================';
+    PRINT 'Starting Bronze Layer Load Process';
+    PRINT '============================================================';
 
-    /**************************************************************************
-        Section 2: Centralized Source File Definitions
-        -----------------------------------------------
-        This table variable stores a reusable list of Bronze tables to load.
-        Each row contains:
-            - Target table name
-            - CSV source file path
-        This eliminates duplicate TRUNCATE + BULK INSERT code.
-    **************************************************************************/
+    -----------------------------------------------------------------
+    -- 1. DEFINE LOAD LIST
+    -----------------------------------------------------------------
     DECLARE @LoadList TABLE
     (
-        TableName      SYSNAME,
-        FilePath       NVARCHAR(4000)
+        ID INT IDENTITY(1,1) PRIMARY KEY,
+        TableName SYSNAME,
+        FilePath NVARCHAR(4000)
     );
 
     INSERT INTO @LoadList (TableName, FilePath)
     VALUES
-        -- CRM Sources
-        ('bronze.crm_cust_info',     'C:\sql\dwh_project\datasets\source_crm\cust_info.csv'),
-        ('bronze.crm_prd_info',      'C:\sql\dwh_project\datasets\source_crm\prd_info.csv'),
-        ('bronze.crm_sales_details', 'C:\sql\dwh_project\datasets\source_crm\sales_details.csv'),
+        ('bronze.crm_cust_info',      'C:\Users\takele\Documents\csv-files\bronze.crm_cust_info.csv'),
+        ('bronze.crm_prd_info',       'C:\Users\takele\Documents\csv-files\bronze.crm_prd_info.csv'),
+        ('bronze.crm_sales_details',  'C:\Users\takele\Documents\csv-files\bronze.crm_sales_details.csv'),
+        ('bronze.erp_loc_a101',       'C:\Users\takele\Documents\csv-files\bronze.erp_loc_a101.csv'),
+        ('bronze.erp_cust_az12',      'C:\Users\takele\Documents\csv-files\bronze.erp_cust_az12.csv'),
+        ('bronze.erp_px_cat_g1v2',    'C:\Users\takele\Documents\csv-files\bronze.erp_px_cat_g1v2.csv');
 
-        -- ERP Sources
-        ('bronze.erp_loc_a101',      'C:\sql\dwh_project\datasets\source_erp\loc_a101.csv'),
-        ('bronze.erp_cust_az12',     'C:\sql\dwh_project\datasets\source_erp\cust_az12.csv'),
-        ('bronze.erp_px_cat_g1v2',   'C:\sql\dwh_project\datasets\source_erp\px_cat_g1v2.csv');
+    -----------------------------------------------------------------
+    -- 2. ITERATE AND LOAD
+    -----------------------------------------------------------------
+    DECLARE
+        @i INT = 1,
+        @max INT = (SELECT COUNT(*) FROM @LoadList);
 
+    WHILE @i <= @max
+    BEGIN
+        SELECT @tbl = TableName, @file = FilePath
+        FROM @LoadList WHERE ID = @i;
 
-    /**************************************************************************
-        Section 3: Begin Processing
-        ----------------------------
-        Logs the start of the Bronze loading batch.
-    **************************************************************************/
-    BEGIN TRY
+        PRINT '------------------------------------------------------------';
+        PRINT 'Processing Table: ' + @tbl;
+        PRINT 'File: ' + @file;
 
-        SET @batch_start = GETDATE();
+        SET @start_time = GETDATE();
 
-        PRINT '============================================================';
-        PRINT ' Starting Bronze Layer Load Process';
-        PRINT '============================================================';
+        BEGIN TRY
 
+            -------------------------------------------------------
+            -- Step 1: TRUNCATE TABLE
+            -------------------------------------------------------
+            SET @sql = N'TRUNCATE TABLE ' + @tbl + N';';
+            EXEC sys.sp_executesql @sql;
 
-    /**************************************************************************
-        Section 4: Loop Through All Bronze Tables to Load
-        --------------------------------------------------
-        For each row in @LoadList:
-            1. TRUNCATE the target table
-            2. BULK INSERT from CSV file
-            3. Log duration
-    **************************************************************************/
-        DECLARE @tbl SYSNAME, @file NVARCHAR(4000), @sql NVARCHAR(MAX);
-
-        DECLARE LoadCursor CURSOR FAST_FORWARD FOR
-            SELECT TableName, FilePath
-            FROM @LoadList;
-
-        OPEN LoadCursor;
-        FETCH NEXT FROM LoadCursor INTO @tbl, @file;
-
-        WHILE @@FETCH_STATUS = 0
-        BEGIN
-            PRINT '------------------------------------------------------------';
-            PRINT 'Processing Table: ' + @tbl;
-            PRINT 'Source File     : ' + @file;
-            PRINT '------------------------------------------------------------';
-
-            SET @start_time = GETDATE();
-
-
-            /* Step 4.1 - Truncate the table */
-            PRINT '>> Truncating table...';
-            SET @sql = 'TRUNCATE TABLE ' + @tbl;
-            EXEC(@sql);
-
-
-            /* Step 4.2 - Bulk Insert data */
-            PRINT '>> Loading data via BULK INSERT...';
-
-            SET @sql = '
-                BULK INSERT ' + @tbl + '
-                FROM ''' + @file + '''
+            -------------------------------------------------------
+            -- Step 2: BULK INSERT (FIXED: Embedding file path)
+            -- If the file is missing or permissions are wrong, this step will fail 
+            -- and immediately jump to the CATCH block below.
+            -------------------------------------------------------
+            SET @sql = N'
+                BULK INSERT ' + @tbl + N'
+                FROM ''' + @file + N''' 
                 WITH
                 (
-                    FIRSTROW = 2,              -- Skip header row
-                    FIELDTERMINATOR = '','',   -- CSV delimiter
-                    ROWTERMINATOR = ''\n'',    -- Line ending handling
-                    TABLOCK                    -- Optimized locking for large loads
+                    FIRSTROW = 2,
+                    FIELDTERMINATOR = '','',
+                    ROWTERMINATOR = ''\n'',
+                    TABLOCK
                 );';
 
-            EXEC(@sql);
+            EXEC sys.sp_executesql @sql;
 
-
-            /* Step 4.3 - Log time taken */
+            -------------------------------------------------------
+            -- Step 3: Logging
+            -------------------------------------------------------
             SET @end_time = GETDATE();
-            PRINT '>> Load Duration: ' + CAST(DATEDIFF(SECOND, @start_time, @end_time) AS NVARCHAR) + ' seconds';
-            PRINT '>> Done!';
-            PRINT '------------------------------------------------------------';
+            PRINT '>> Load Duration: ' + CAST(DATEDIFF(SECOND, @start_time, @end_time) AS NVARCHAR) + ' sec';
+            PRINT 'OK';
 
-            FETCH NEXT FROM LoadCursor INTO @tbl, @file;
-        END
+        END TRY
+        BEGIN CATCH
+            -- The CATCH block handles all errors (including file not found errors from BULK INSERT)
+            PRINT '*** ERROR loading table ' + @tbl + ' ***';
+            PRINT 'Message: ' + ERROR_MESSAGE();
+            PRINT 'Number : ' + CAST(ERROR_NUMBER() AS NVARCHAR);
+        END CATCH;
 
-        CLOSE LoadCursor;
-        DEALLOCATE LoadCursor;
+        -- No GOTO needed, just increment the counter for the next loop iteration
+        SET @i += 1;
+    END
 
+    PRINT '============================================================';
+    PRINT 'Bronze Layer Load Completed.';
+    PRINT 'Total Duration: ' + CAST(DATEDIFF(SECOND, @batch_start, GETDATE()) AS NVARCHAR) + ' seconds';
+    PRINT '============================================================';
 
-    /**************************************************************************
-        Section 5: Final Summary Logging
-        --------------------------------
-        Prints total time taken for the full Bronze load batch.
-    **************************************************************************/
-        SET @batch_end = GETDATE();
-
-        PRINT '============================================================';
-        PRINT ' Bronze Layer Load - COMPLETED SUCCESSFULLY';
-        PRINT ' Total Load Duration: ' + CAST(DATEDIFF(SECOND, @batch_start, @batch_end) AS NVARCHAR) + ' seconds';
-        PRINT '============================================================';
-
-    END TRY
-
-
-    /**************************************************************************
-        Section 6: Error Handling
-        --------------------------
-        Catches all SQL errors and prints them.
-    **************************************************************************/
-    BEGIN CATCH
-        PRINT '============================================================';
-        PRINT ' ERROR OCCURRED DURING BRONZE LAYER LOADING';
-        PRINT '------------------------------------------------------------';
-        PRINT 'Error Message: ' + ERROR_MESSAGE();
-        PRINT 'Error Number : ' + CAST(ERROR_NUMBER() AS NVARCHAR);
-        PRINT 'Error State  : ' + CAST(ERROR_STATE() AS NVARCHAR);
-        PRINT '============================================================';
-        RETURN -1;
-    END CATCH
-
-END;
+END
 GO
-
